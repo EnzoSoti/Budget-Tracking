@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   View,
@@ -272,21 +272,54 @@ const getDateRangeArray = (startStr, endStr) => {
   return dates;
 };
 
+const getDefaultCutoffRange = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth(); // 0-indexed
+  const day = now.getDate();
+  const pad = (n) => String(n).padStart(2, '0');
+
+  if (day <= 10) {
+    const prevMonthDate = new Date(year, month - 1, 26);
+    const prevYear = prevMonthDate.getFullYear();
+    const prevMonth = prevMonthDate.getMonth() + 1;
+    return {
+      start: `${prevYear}-${pad(prevMonth)}-26`,
+      end: `${year}-${pad(month + 1)}-10`
+    };
+  } else if (day <= 25) {
+    return {
+      start: `${year}-${pad(month + 1)}-11`,
+      end: `${year}-${pad(month + 1)}-25`
+    };
+  } else {
+    const nextMonthDate = new Date(year, month + 1, 10);
+    const nextYear = nextMonthDate.getFullYear();
+    const nextMonth = nextMonthDate.getMonth() + 1;
+    return {
+      start: `${year}-${pad(month + 1)}-26`,
+      end: `${nextYear}-${pad(nextMonth)}-10`
+    };
+  }
+};
+
 export default function App() {
+  const defaultCutoff = getDefaultCutoffRange();
   const [dailySalaries, setDailySalaries] = useState({});
   const [expenses, setExpenses] = useState([]);
   const [activeTab, setActiveTab] = useState('ALL');
   const [toast, setToast] = useState(null);
+  const toastTimeoutRef = useRef(null);
   
-  const [monthlySalary, setMonthlySalary] = useState('21000');
-  const [defaultDailyIncome, setDefaultDailyIncome] = useState('700');
-  const [cutoffStart, setCutoffStart] = useState('2026-07-26');
-  const [cutoffEnd, setCutoffEnd] = useState('2026-08-10');
+  const [monthlySalary, setMonthlySalary] = useState('');
+  const [defaultDailyIncome, setDefaultDailyIncome] = useState('');
+  const [cutoffStart, setCutoffStart] = useState(defaultCutoff.start);
+  const [cutoffEnd, setCutoffEnd] = useState(defaultCutoff.end);
   
   const [selectedDate, setSelectedDate] = useState(getTodayString());
   const [expenseDate, setExpenseDate] = useState(getTodayString());
   
-  const [cutoffBasePay, setCutoffBasePay] = useState('10500');
+  const [cutoffBasePay, setCutoffBasePay] = useState('');
   const [pendingPayout, setPendingPayout] = useState('0');
   const [pendingPayoutNote, setPendingPayoutNote] = useState('');
   
@@ -340,9 +373,13 @@ export default function App() {
   const [isDark, setIsDark] = useState(true);
 
   const showToast = (message, type = 'success', duration = 3200) => {
-    setToast({ message, type });
-    setTimeout(() => {
-      setToast(null);
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToast({ message, type, isExiting: false });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(prev => prev ? { ...prev, isExiting: true } : null);
+      setTimeout(() => {
+        setToast(null);
+      }, 250);
     }, duration);
   };
 
@@ -624,18 +661,19 @@ export default function App() {
   const handleMonthlySalaryChange = (val) => {
     setMonthlySalary(val);
     const parsedMonthly = parseFloat(val);
-    const newCutoffBase = !isNaN(parsedMonthly) && parsedMonthly > 0 ? (parsedMonthly / 2).toString() : '10500';
+    const newCutoffBase = !isNaN(parsedMonthly) && parsedMonthly > 0 ? (parsedMonthly / 2).toString() : '';
     setCutoffBasePay(newCutoffBase);
     saveData(dailySalaries, expenses, isDark, attendanceMap, { monthlySalary: val, cutoffBasePay: newCutoffBase });
   };
 
   const formatPeso = (num) => {
+    const n = typeof num === 'number' && !isNaN(num) ? num : (parseFloat(num) || 0);
     return new Intl.NumberFormat('en-PH', {
       style: 'currency',
       currency: 'PHP',
       minimumFractionDigits: 2,
       maximumFractionDigits: 2
-    }).format(num);
+    }).format(n);
   };
 
   const changeDateByDays = (days) => {
@@ -708,9 +746,9 @@ export default function App() {
   let totalAttendedDays = 0;
   let totalTardyMinutes = 0;
 
-  const userMonthly = Math.max(0, parseFloat(monthlySalary) || 21000);
-  const dailyWorkRate = userMonthly / 26;
-  const minuteRate = dailyWorkRate / 480;
+  const userMonthly = Math.max(0, parseFloat(monthlySalary) || 0);
+  const dailyWorkRate = userMonthly > 0 ? userMonthly / 26 : 0;
+  const minuteRate = dailyWorkRate > 0 ? dailyWorkRate / 480 : 0;
 
   rangeDates.forEach(d => {
     const status = getResolvedStatus(d);
@@ -747,7 +785,7 @@ export default function App() {
 
   const currentDateSalary = dailySalaries[selectedDate] !== undefined 
     ? dailySalaries[selectedDate] 
-    : (parseFloat(defaultDailyIncome) || 700);
+    : (parseFloat(defaultDailyIncome) || 0);
 
   // Toggle Attendance status: FULL -> HALF -> SPECIAL_HOLIDAY (No Pay) -> ABSENT -> REST_DAY -> FULL
   const toggleAttendanceStatus = (dateStr) => {
@@ -759,6 +797,7 @@ export default function App() {
     else if (current === 'SPECIAL_HOLIDAY') nextStatus = 'ABSENT';
     else if (current === 'ABSENT') nextStatus = 'REST_DAY';
     else if (current === 'REST_DAY') nextStatus = 'FULL';
+    else nextStatus = 'FULL';
 
     const newAttMap = { ...attendanceMap, [dateStr]: nextStatus };
     setAttendanceMap(newAttMap);
@@ -767,22 +806,21 @@ export default function App() {
 
   const handleAddExpense = (fromModal = false) => {
     const trimmedName = name.trim();
-    const amt = parseFloat(amount);
-
     if (!trimmedName) {
       showToast('Please enter an expense description!', 'error');
       return;
     }
 
+    const amt = parseFloat(amount);
     if (isNaN(amt) || amt <= 0) {
       showToast('Please enter an amount greater than ₱0!', 'error');
       return;
     }
 
-    const targetDate = expenseDate || selectedDate;
+    const targetDate = expenseDate || getTodayString();
 
     const newItem = {
-      id: Date.now().toString() + '_' + Math.random().toString(36).substring(2, 9),
+      id: Date.now().toString(),
       name: trimmedName,
       amount: amt,
       date: targetDate
@@ -798,7 +836,7 @@ export default function App() {
 
     const existingDateTotal = expenses.filter(e => e.date === targetDate).reduce((s, i) => s + i.amount, 0);
     const newTotal = existingDateTotal + amt;
-    const targetIncome = dailySalaries[targetDate] !== undefined ? dailySalaries[targetDate] : (parseFloat(defaultDailyIncome) || 700);
+    const targetIncome = dailySalaries[targetDate] !== undefined ? dailySalaries[targetDate] : (parseFloat(defaultDailyIncome) || 0);
 
     if (newTotal > targetIncome) {
       showToast(`⚠️ Logged! Over budget by ${formatPeso(newTotal - targetIncome)} on ${targetDate}.`, 'warning', 4000);
@@ -1094,7 +1132,7 @@ export default function App() {
 
       {/* Floating Animated Toast Alert */}
       {toast && (
-        <View style={[
+        <View className={toast.isExiting ? "animate-toast-exit" : "animate-toast"} style={[
           styles.toastPopup,
           toast.type === 'error' ? styles.toastError :
           toast.type === 'warning' ? styles.toastWarning : styles.toastSuccess
@@ -1105,6 +1143,7 @@ export default function App() {
 
       {/* FLOATING ACTION BUTTON (FAB) */}
       <TouchableOpacity
+        className="fab-pulse tap-scale"
         style={styles.floatingActionBtn}
         onPress={() => {
           if (activeTab === 'DEBTS') {
@@ -1133,13 +1172,13 @@ export default function App() {
                 <Text style={[styles.mainTitleAccent]}>Pro</Text>
               </View>
               <Text style={[styles.mainSubtitle, theme.subtext]}>
-                {formatPeso(parseFloat(monthlySalary) || 21000)} /mo Net Salary
+                {parseFloat(monthlySalary) > 0 ? `${formatPeso(parseFloat(monthlySalary))} /mo Net Salary` : 'FinTech Budget & Cut-off Tracker'}
               </Text>
             </View>
           </View>
 
           <View style={styles.topRightControls}>
-            <TouchableOpacity style={[styles.themePill, theme.card]} onPress={toggleTheme} activeOpacity={0.7}>
+            <TouchableOpacity className="tap-scale" style={[styles.themePill, theme.card]} onPress={toggleTheme} activeOpacity={0.7}>
               {isDark ? <SunIcon size={16} color="#f59e0b" /> : <MoonIcon size={16} color="#10b981" />}
             </TouchableOpacity>
           </View>
@@ -1153,6 +1192,7 @@ export default function App() {
           style={styles.tabScrollWrapper}
         >
           <TouchableOpacity
+            className="tap-scale"
             style={[styles.segmentTab, activeTab === 'ALL' && styles.segmentTabActive]}
             onPress={() => setActiveTab('ALL')}
             activeOpacity={0.8}
@@ -1163,6 +1203,7 @@ export default function App() {
           </TouchableOpacity>
 
           <TouchableOpacity
+            className="tap-scale"
             style={[styles.segmentTab, activeTab === 'DAILY' && styles.segmentTabActive]}
             onPress={() => setActiveTab('DAILY')}
             activeOpacity={0.8}
@@ -1173,6 +1214,7 @@ export default function App() {
           </TouchableOpacity>
 
           <TouchableOpacity
+            className="tap-scale"
             style={[styles.segmentTab, activeTab === 'SALARY' && styles.segmentTabActive]}
             onPress={() => setActiveTab('SALARY')}
             activeOpacity={0.8}
@@ -1183,6 +1225,7 @@ export default function App() {
           </TouchableOpacity>
 
           <TouchableOpacity
+            className="tap-scale"
             style={[styles.segmentTab, activeTab === 'CALENDAR' && styles.segmentTabActive]}
             onPress={() => setActiveTab('CALENDAR')}
             activeOpacity={0.8}
@@ -1193,6 +1236,7 @@ export default function App() {
           </TouchableOpacity>
 
           <TouchableOpacity
+            className="tap-scale"
             style={[styles.segmentTab, activeTab === 'EXPENSES' && styles.segmentTabActive]}
             onPress={() => setActiveTab('EXPENSES')}
             activeOpacity={0.8}
@@ -1203,6 +1247,7 @@ export default function App() {
           </TouchableOpacity>
 
           <TouchableOpacity
+            className="tap-scale"
             style={[styles.segmentTab, activeTab === 'DEBTS' && styles.segmentTabActive]}
             onPress={() => setActiveTab('DEBTS')}
             activeOpacity={0.8}
@@ -1221,18 +1266,18 @@ export default function App() {
             
             {/* FEATURE 1: CUT-OFF SALARY CALCULATOR */}
             {showSalaryCard && (
-              <View style={[styles.fintechCard, theme.card]}>
+              <View className="animate-card-enter" style={[styles.fintechCard, theme.card]}>
                 <View style={styles.cardHeaderFlex}>
                   <View style={styles.headerIconGroup}>
                     <BriefcaseIcon size={17} color="#10b981" />
                     <Text style={[styles.cardTitle, theme.text]}>Cut-off Salary Calculator</Text>
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                    <TouchableOpacity style={[styles.presetPill, theme.btnBg, { flexDirection: 'row', alignItems: 'center', gap: 4 }]} onPress={() => setShowReportModal(true)} activeOpacity={0.85}>
+                    <TouchableOpacity className="tap-scale" style={[styles.presetPill, theme.btnBg, { flexDirection: 'row', alignItems: 'center', gap: 4 }]} onPress={() => setShowReportModal(true)} activeOpacity={0.85}>
                       <FileTextIcon size={13} color="#10b981" />
                       <Text style={[styles.presetPillText, { color: '#10b981', fontWeight: '800' }]}>PDF Report</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.attendanceBtn} onPress={() => setShowAttendanceModal(true)} activeOpacity={0.85}>
+                    <TouchableOpacity className="tap-scale" style={styles.attendanceBtn} onPress={() => setShowAttendanceModal(true)} activeOpacity={0.85}>
                       <CalendarIcon size={14} color="#ffffff" style={{ marginRight: 5 }} />
                       <Text style={styles.attendanceBtnText}>Attendance</Text>
                     </TouchableOpacity>
@@ -1244,6 +1289,7 @@ export default function App() {
                   <Text style={[styles.inputLabel, theme.subtext]}>⚡ 1-Tap Cut-off Presets:</Text>
                   <View style={styles.presetPillsRow}>
                     <TouchableOpacity
+                      className="tap-scale"
                       style={[styles.presetPill, theme.inputBg]}
                       onPress={() => applyCutoffPreset('CUTOFF_2')}
                       activeOpacity={0.7}
@@ -1251,6 +1297,7 @@ export default function App() {
                       <Text style={[styles.presetPillText, theme.text]}>2nd Cut-off (26-10)</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
+                      className="tap-scale"
                       style={[styles.presetPill, theme.inputBg]}
                       onPress={() => applyCutoffPreset('CUTOFF_1')}
                       activeOpacity={0.7}
@@ -1258,6 +1305,7 @@ export default function App() {
                       <Text style={[styles.presetPillText, theme.text]}>1st Cut-off (11-25)</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
+                      className="tap-scale"
                       style={[styles.presetPill, theme.inputBg]}
                       onPress={() => applyCutoffPreset('FULL_MONTH')}
                       activeOpacity={0.7}
@@ -1275,7 +1323,7 @@ export default function App() {
                     value={monthlySalary}
                     onChangeText={handleMonthlySalaryChange}
                     keyboardType="numeric"
-                    placeholder="21000"
+                    placeholder="0.00"
                     placeholderTextColor={isDark ? "#64748b" : "#94a3b8"}
                   />
                 </View>
@@ -2619,8 +2667,9 @@ export default function App() {
 
             <View style={[styles.modalBanner, theme.inputBg]}>
               <Text style={[styles.modalBannerText, theme.text]}>
-                Monthly Net: {formatPeso(parseFloat(monthlySalary) || 21000)} | Semi-Monthly Base: {formatPeso(userMonthly / 2)}{"\n"}
-                Daily Rate: {formatPeso(dailyWorkRate)} | Hourly: {formatPeso(dailyWorkRate / 8)} | Late: {formatPeso(minuteRate)}/min
+                {userMonthly > 0 
+                  ? `Monthly Net: ${formatPeso(userMonthly)} | Semi-Monthly Base: ${formatPeso(userMonthly / 2)}\nDaily Rate: ${formatPeso(dailyWorkRate)} | Hourly: ${formatPeso(dailyWorkRate / 8)} | Late: ${formatPeso(minuteRate)}/min`
+                  : 'Set your Monthly Net Salary in the Cut-off tab to calculate attendance rates & deductions.'}
               </Text>
             </View>
 
@@ -3187,7 +3236,7 @@ export default function App() {
               </div>
               <div>
                 <div style={{ fontSize: 9, fontWeight: 800, color: isDark ? '#94a3b8' : '#64748b', textTransform: 'uppercase' }}>Salary Base</div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: isDark ? '#f8fafc' : '#0f172a', marginTop: 2 }}>{formatPeso(monthlySalary || 21000)}/mo</div>
+                <div style={{ fontSize: 11, fontWeight: 700, color: isDark ? '#f8fafc' : '#0f172a', marginTop: 2 }}>{parseFloat(monthlySalary) > 0 ? `${formatPeso(monthlySalary)}/mo` : 'Not Set'}</div>
               </div>
             </div>
 

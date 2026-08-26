@@ -6,7 +6,7 @@ A modern, sleek, mobile-installable single-page application for tracking your sa
 
 ## 🌟 Key Features
 
-- 💵 **Salary Management**: Input your paycheck / monthly salary (e.g., `₱11,153.80`).
+- 💵 **Salary Management**: Input your custom monthly net salary and daily income rates.
 - ➕ **Expense Tracking**: Add expense items with amounts, descriptions, and categories.
 - ⚡ **Quick Presets**: 1-tap add chips for common expenses (*Rice, Electricity, Water, Internet, Transpo, Rent*).
 - 🏷️ **Categorization**: Tag expenses with icons and emojis (🍚 Food, ⚡ Bills, 🚌 Transport, 🏠 Housing, 🏥 Health, 🛍️ Shopping, 🎮 Entertainment, 💡 Others).

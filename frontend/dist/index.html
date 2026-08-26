@@ -177,13 +177,20 @@
     }
 
     /* RADIX UI DIALOG STYLES & ANIMATIONS */
+    /* RADIX UI DIALOG STYLES & OPEN/CLOSE ANIMATIONS */
     .radix-dialog-overlay {
       position: fixed;
       inset: 0;
       background: rgba(9, 13, 22, 0.85);
-      backdrop-filter: blur(5px);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
       z-index: 9990;
-      animation: radixOverlayShow 200ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .radix-dialog-overlay[data-state="open"] {
+      animation: radixOverlayShow 260ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    .radix-dialog-overlay[data-state="closed"] {
+      animation: radixOverlayHide 180ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
 
     .radix-dialog-content {
@@ -200,18 +207,23 @@
       border-radius: 20px;
       padding: 22px;
       z-index: 9991;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4);
-      animation: radixContentShow 200ms cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 35px rgba(16, 185, 129, 0.08);
       display: flex;
       flex-direction: column;
       gap: 15px;
       box-sizing: border-box;
     }
+    .radix-dialog-content[data-state="open"] {
+      animation: radixContentShow 280ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    .radix-dialog-content[data-state="closed"] {
+      animation: radixContentHide 190ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
 
     .radix-dialog-content.light-mode-dialog {
       background-color: #ffffff;
       border-color: #e2e8f0;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.2), 0 0 35px rgba(16, 185, 129, 0.05);
     }
 
     .radix-confirm-content {
@@ -237,6 +249,129 @@
     @keyframes radixOverlayShow {
       from { opacity: 0; }
       to { opacity: 1; }
+    }
+
+    @keyframes radixOverlayHide {
+      from { opacity: 1; }
+      to { opacity: 0; }
+    }
+
+    @keyframes radixContentShow {
+      from {
+        opacity: 0;
+        transform: translate(-50%, -46%) scale(0.92);
+      }
+      to {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+      }
+    }
+
+    @keyframes radixContentHide {
+      from {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+      }
+      to {
+        opacity: 0;
+        transform: translate(-50%, -48%) scale(0.93);
+      }
+    }
+
+    /* CARD OPEN & SWITCH ANIMATIONS */
+    .animate-card-enter {
+      animation: cardSlideUp 320ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+    }
+
+    .animate-card-enter-stagger {
+      animation: cardSlideUp 380ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+      animation-delay: 50ms;
+    }
+
+    @keyframes cardSlideUp {
+      from {
+        opacity: 0;
+        transform: translateY(16px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* TOAST OPEN & CLOSE ANIMATIONS */
+    .animate-toast {
+      animation: toastIn 320ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    .animate-toast-exit {
+      animation: toastOut 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    @keyframes toastIn {
+      from {
+        opacity: 0;
+        transform: translateY(-24px) scale(0.92);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    @keyframes toastOut {
+      from {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+      to {
+        opacity: 0;
+        transform: translateY(-20px) scale(0.93);
+      }
+    }
+
+    /* LIST ITEM OPEN / STAGGER ANIMATIONS */
+    .animate-row-enter {
+      animation: rowSlideIn 260ms cubic-bezier(0.16, 1, 0.3, 1) backwards;
+    }
+
+    @keyframes rowSlideIn {
+      from {
+        opacity: 0;
+        transform: translateX(-10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    /* TACTILE TAP & HOVER MICRO-ANIMATIONS */
+    .tap-scale {
+      transition: transform 0.16s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease !important;
+      cursor: pointer;
+    }
+    .tap-scale:hover {
+      transform: translateY(-1px);
+    }
+    .tap-scale:active {
+      transform: scale(0.95) !important;
+    }
+
+    /* FLOATING ACTION BUTTON PULSE ANIMATION */
+    .fab-pulse {
+      animation: fabFloat 3s ease-in-out infinite alternate;
+    }
+    @keyframes fabFloat {
+      0% {
+        transform: translateY(0) scale(1);
+      }
+      100% {
+        transform: translateY(-3px) scale(1.02);
+      }
+    }
+    .fab-pulse:active {
+      transform: scale(0.92) !important;
+      animation: none;
     }
 
     /* Print Styles for Clean Professional PDF Report Export */
@@ -313,7 +448,7 @@
       }
     }
   </style>
-  <script type="module" crossorigin src="/assets/index-Db9i6mwu.js"></script>
+  <script type="module" crossorigin src="/assets/index-DRgDMfkM.js"></script>
 </head>
 <body>
   <div id="root"></div>

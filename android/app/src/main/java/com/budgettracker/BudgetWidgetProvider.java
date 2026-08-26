@@ -27,7 +27,7 @@ public class BudgetWidgetProvider extends AppWidgetProvider {
     static void updateAppWidget(Context context, AppWidgetManager appWidgetManager, int appWidgetId) {
         // Read remaining balance from shared preferences
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-        double remaining = prefs.getFloat("remaining_balance", 11153.80f);
+        double remaining = prefs.getFloat("remaining_balance", 0.0f);
 
         // Format Currency ₱
         NumberFormat pesoFormat = NumberFormat.getCurrencyInstance(new Locale("en", "PH"));

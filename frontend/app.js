@@ -16,7 +16,7 @@ const CATEGORIES = {
 
 // Initial State
 let state = {
-  salary: 11153.80,
+  salary: 0,
   expenses: [],
   theme: 'dark'
 };
@@ -68,7 +68,7 @@ function loadSavedData() {
   if (savedState) {
     try {
       const parsed = JSON.parse(savedState);
-      state.salary = typeof parsed.salary === 'number' ? parsed.salary : 11153.80;
+      state.salary = typeof parsed.salary === 'number' ? parsed.salary : 0;
       state.expenses = Array.isArray(parsed.expenses) ? parsed.expenses : [];
       state.theme = parsed.theme || 'dark';
     } catch (e) {
@@ -78,7 +78,7 @@ function loadSavedData() {
 
   document.documentElement.setAttribute('data-theme', state.theme);
   themeToggleBtn.textContent = state.theme === 'dark' ? '☀️' : '🌙';
-  salaryInput.value = state.salary;
+  salaryInput.value = state.salary > 0 ? state.salary : '';
 }
 
 // Save to localStorage
