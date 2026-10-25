@@ -9,5 +9,8 @@
     "dev": "npm --prefix frontend run dev",
     "build": "npm --prefix frontend run build",
     "start": "npm --prefix frontend run start"
+  },
+  "devDependencies": {
+    "@enzosoti/agents": "github:EnzoSoti/agents"
   }
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   View,
@@ -207,6 +207,22 @@ const FileTextIcon = (props) => (
   </SvgIcon>
 );
 
+const UploadIcon = (props) => (
+  <SvgIcon {...props}>
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="17 8 12 3 7 8" />
+    <line x1="12" y1="3" x2="12" y2="15" />
+  </SvgIcon>
+);
+
+const DatabaseIcon = (props) => (
+  <SvgIcon {...props}>
+    <ellipse cx="12" cy="5" rx="9" ry="3" />
+    <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+    <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+  </SvgIcon>
+);
+
 const EXPENSE_CATEGORIES = [
   { id: 'food', label: 'Food / Meals', icon: '🍔', prefix: 'Meal: ', color: '#f59e0b' },
   { id: 'transport', label: 'Transport', icon: '🚗', prefix: 'Fare / Gas: ', color: '#3b82f6' },
@@ -365,12 +381,15 @@ export default function App() {
   
   const [name, setName] = useState('');
   const [amount, setAmount] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState(EXPENSE_CATEGORIES[0].id);
   
   const [editName, setEditName] = useState('');
   const [editAmount, setEditAmount] = useState('');
   const [editDate, setEditDate] = useState(getTodayString());
+  const [editCategory, setEditCategory] = useState('misc');
   
   const [isDark, setIsDark] = useState(true);
+  const fileInputRef = useRef(null);
 
   const showToast = (message, type = 'success', duration = 3200) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -539,16 +558,19 @@ export default function App() {
 
   const promptDeleteDebt = (item) => {
     const paidSoFar = (item.payments || []).reduce((s, p) => s + p.amount, 0);
+    const paymentIds = new Set((item.payments || []).map(p => p.id));
     setConfirmModal({
       title: `Delete Debt "${item.title}"?`,
-      message: `Are you sure you want to delete this debt (${formatPeso(item.totalAmount)}) with ${item.payments?.length || 0} payment history records totaling ${formatPeso(paidSoFar)}? This action cannot be undone.`,
+      message: `Are you sure you want to delete this debt (${formatPeso(item.totalAmount)}) with ${item.payments?.length || 0} payment history records totaling ${formatPeso(paidSoFar)}? All linked payment expense ledger entries will also be cleaned up. This action cannot be undone.`,
       confirmLabel: 'Delete Debt',
       isDanger: true,
       onConfirm: () => {
-        const updated = debts.filter(d => d.id !== item.id);
-        setDebts(updated);
-        saveData(dailySalaries, expenses, isDark, attendanceMap, { debts: updated });
-        showToast(`Deleted debt "${item.title}"`, 'success');
+        const updatedDebts = debts.filter(d => d.id !== item.id);
+        const updatedExpenses = expenses.filter(e => !paymentIds.has(e.debtPaymentId));
+        setDebts(updatedDebts);
+        setExpenses(updatedExpenses);
+        saveData(dailySalaries, updatedExpenses, isDark, attendanceMap, { debts: updatedDebts, expenses: updatedExpenses });
+        showToast(`Deleted debt "${item.title}" and cleaned up linked expense entries`, 'success');
       }
     });
   };
@@ -594,6 +616,7 @@ export default function App() {
         name: `Loan/Debt Pay: ${selectedDebtForPayment.title}${paymentNote ? ` - ${paymentNote.trim()}` : ''}`,
         amount: amt,
         date: paymentDate || getTodayString(),
+        categoryId: 'debts',
         debtPaymentId: paymentItem.id
       };
       updatedExpenses = [newExp, ...expenses];
@@ -724,6 +747,7 @@ export default function App() {
   };
 
   const handleSelectCategory = (cat) => {
+    setSelectedCategory(cat.id);
     if (!name || name.trim() === '' || EXPENSE_CATEGORIES.some(c => name.startsWith(c.prefix))) {
       setName(cat.prefix);
     } else {
@@ -819,11 +843,19 @@ export default function App() {
 
     const targetDate = expenseDate || getTodayString();
 
+    // Detect category if not explicitly chosen or if prefix matches
+    let detectedCat = selectedCategory || 'misc';
+    const foundCat = EXPENSE_CATEGORIES.find(c => trimmedName.toLowerCase().startsWith(c.prefix.toLowerCase()) || trimmedName.toLowerCase().includes(c.label.toLowerCase()));
+    if (foundCat) {
+      detectedCat = foundCat.id;
+    }
+
     const newItem = {
       id: Date.now().toString(),
       name: trimmedName,
       amount: amt,
-      date: targetDate
+      date: targetDate,
+      categoryId: detectedCat
     };
 
     const updated = [newItem, ...expenses];
@@ -846,15 +878,31 @@ export default function App() {
   };
 
   const promptDeleteExpense = (item) => {
+    const isDebtPayment = !!item.debtPaymentId;
     setConfirmModal({
-      title: 'Delete Expense Record?',
-      message: `Are you sure you want to delete "${item.name}" (-${formatPeso(item.amount)}) from ${item.date}? This action cannot be undone.`,
+      title: isDebtPayment ? 'Delete Synced Loan Payment?' : 'Delete Expense Record?',
+      message: isDebtPayment
+        ? `This expense is linked to an installment payment of ${formatPeso(item.amount)} on debt. Deleting it will also remove the installment record from the debt schedule. Continue?`
+        : `Are you sure you want to delete "${item.name}" (-${formatPeso(item.amount)}) from ${item.date}? This action cannot be undone.`,
       confirmLabel: 'Delete Record',
       isDanger: true,
       onConfirm: () => {
-        const updated = expenses.filter(exp => exp.id !== item.id);
-        setExpenses(updated);
-        saveData(dailySalaries, updated, isDark);
+        const updatedExpenses = expenses.filter(exp => exp.id !== item.id);
+        setExpenses(updatedExpenses);
+
+        let updatedDebts = debts;
+        if (item.debtPaymentId) {
+          updatedDebts = debts.map(d => ({
+            ...d,
+            payments: (d.payments || []).filter(p => p.id !== item.debtPaymentId)
+          }));
+          setDebts(updatedDebts);
+        }
+
+        saveData(dailySalaries, updatedExpenses, isDark, attendanceMap, {
+          expenses: updatedExpenses,
+          debts: updatedDebts
+        });
         showToast(`Deleted "${item.name}" (-${formatPeso(item.amount)})`, 'success');
       }
     });
@@ -865,6 +913,7 @@ export default function App() {
     setEditName(item.name);
     setEditAmount(item.amount.toString());
     setEditDate(item.date || selectedDate);
+    setEditCategory(item.categoryId || 'misc');
   };
 
   const handleSaveEdit = () => {
@@ -879,13 +928,20 @@ export default function App() {
     }
     if (!editItem) return;
 
+    let detectedCat = editCategory || editItem.categoryId || 'misc';
+    const foundCat = EXPENSE_CATEGORIES.find(c => editName.trim().toLowerCase().startsWith(c.prefix.toLowerCase()) || editName.trim().toLowerCase().includes(c.label.toLowerCase()));
+    if (foundCat) {
+      detectedCat = foundCat.id;
+    }
+
     const updated = expenses.map(exp => {
       if (exp.id === editItem.id) {
         return {
           ...exp,
           name: editName.trim(),
           amount: amt,
-          date: editDate
+          date: editDate,
+          categoryId: exp.debtPaymentId ? 'debts' : detectedCat
         };
       }
       return exp;
@@ -923,9 +979,10 @@ export default function App() {
       showToast('No expenses recorded to export', 'warning');
       return;
     }
-    let csv = "Date,Expense Description,Amount (PHP)\n";
+    let csv = "Date,Expense Description,Category,Amount (PHP)\n";
     expenses.forEach(exp => {
-      csv += `"${exp.date || ''}","${exp.name.replace(/"/g, '""')}",${exp.amount}\n`;
+      const catLabel = ALL_ANALYTICS_CATEGORIES.find(c => c.id === exp.categoryId)?.label || 'General';
+      csv += `"${exp.date || ''}","${exp.name.replace(/"/g, '""')}","${catLabel}",${exp.amount}\n`;
     });
 
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -938,6 +995,93 @@ export default function App() {
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
     showToast('CSV export downloaded successfully', 'success');
+  };
+
+  const handleExportJSON = () => {
+    const backupData = {
+      schemaVersion: 2,
+      exportTimestamp: new Date().toISOString(),
+      dailySalaries,
+      expenses,
+      debts,
+      attendanceMap,
+      tardyMap,
+      monthlySalary,
+      defaultDailyIncome,
+      cutoffBasePay,
+      cutoffStart,
+      cutoffEnd,
+      pendingPayout,
+      pendingPayoutNote,
+      isDark
+    };
+
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `BudgetPro_Backup_${getTodayString()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast('Complete financial JSON backup downloaded!', 'success');
+  };
+
+  const handleImportJSON = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const imported = JSON.parse(event.target?.result);
+        if (!imported || typeof imported !== 'object') {
+          showToast('Invalid backup file format', 'error');
+          return;
+        }
+
+        if (imported.dailySalaries) setDailySalaries(imported.dailySalaries);
+        if (Array.isArray(imported.expenses)) setExpenses(imported.expenses);
+        if (Array.isArray(imported.debts)) setDebts(imported.debts);
+        if (imported.attendanceMap) setAttendanceMap(imported.attendanceMap);
+        if (imported.tardyMap) setTardyMap(imported.tardyMap);
+        if (imported.monthlySalary) setMonthlySalary(imported.monthlySalary);
+        if (imported.defaultDailyIncome) setDefaultDailyIncome(imported.defaultDailyIncome);
+        if (imported.cutoffBasePay) setCutoffBasePay(imported.cutoffBasePay);
+        if (imported.cutoffStart) setCutoffStart(imported.cutoffStart);
+        if (imported.cutoffEnd) setCutoffEnd(imported.cutoffEnd);
+        if (imported.pendingPayout !== undefined) setPendingPayout(imported.pendingPayout);
+        if (imported.pendingPayoutNote !== undefined) setPendingPayoutNote(imported.pendingPayoutNote);
+        if (typeof imported.isDark === 'boolean') setIsDark(imported.isDark);
+
+        saveData(
+          imported.dailySalaries || {},
+          imported.expenses || [],
+          typeof imported.isDark === 'boolean' ? imported.isDark : isDark,
+          imported.attendanceMap || {},
+          {
+            tardyMap: imported.tardyMap || {},
+            monthlySalary: imported.monthlySalary || monthlySalary,
+            defaultDailyIncome: imported.defaultDailyIncome || defaultDailyIncome,
+            cutoffBasePay: imported.cutoffBasePay || cutoffBasePay,
+            cutoffStart: imported.cutoffStart || cutoffStart,
+            cutoffEnd: imported.cutoffEnd || cutoffEnd,
+            pendingPayout: imported.pendingPayout || pendingPayout,
+            pendingPayoutNote: imported.pendingPayoutNote || pendingPayoutNote,
+            debts: imported.debts || []
+          }
+        );
+
+        showToast('Backup restored successfully!', 'success');
+      } catch (err) {
+        console.error(err);
+        showToast('Failed to parse JSON backup file', 'error');
+      } finally {
+        if (e.target) e.target.value = '';
+      }
+    };
+    reader.readAsText(file);
   };
 
   const toggleTheme = () => {
@@ -996,36 +1140,40 @@ export default function App() {
   const totalAnalyticsExpense = analyticsExpenses.reduce((s, e) => s + e.amount, 0);
 
   // Categorize Expenses for Analytics
-  const ALL_ANALYTICS_CATEGORIES = [
+  const ALL_ANALYTICS_CATEGORIES = useMemo(() => [
     ...EXPENSE_CATEGORIES,
     { id: 'debts', label: 'Debt Payments', icon: '🏍️', prefix: 'Loan/Debt Pay:', color: '#f43f5e' }
-  ];
+  ], []);
 
-  const categoryBreakdown = ALL_ANALYTICS_CATEGORIES.map(cat => {
-    let catExpenses = [];
-    if (cat.id === 'debts') {
-      catExpenses = analyticsExpenses.filter(e => e.debtPaymentId || e.name.toLowerCase().startsWith('loan/debt pay:'));
-    } else if (cat.id === 'misc') {
-      catExpenses = analyticsExpenses.filter(e => {
-        if (e.debtPaymentId || e.name.toLowerCase().startsWith('loan/debt pay:')) return false;
-        const matchesOther = EXPENSE_CATEGORIES.slice(0, 6).some(c => e.name.toLowerCase().startsWith(c.prefix.toLowerCase()) || e.name.toLowerCase().includes(c.label.toLowerCase()));
-        return !matchesOther;
-      });
-    } else {
-      catExpenses = analyticsExpenses.filter(e => {
-        if (e.debtPaymentId || e.name.toLowerCase().startsWith('loan/debt pay:')) return false;
-        return e.name.toLowerCase().startsWith(cat.prefix.toLowerCase()) || e.name.toLowerCase().includes(cat.label.toLowerCase());
-      });
-    }
-    const catTotal = catExpenses.reduce((s, e) => s + e.amount, 0);
-    const catPct = totalAnalyticsExpense > 0 ? Math.round((catTotal / totalAnalyticsExpense) * 100) : 0;
-    return {
-      ...cat,
-      total: catTotal,
-      pct: catPct,
-      count: catExpenses.length
-    };
-  }).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
+  const categoryBreakdown = useMemo(() => {
+    return ALL_ANALYTICS_CATEGORIES.map(cat => {
+      let catExpenses = [];
+      if (cat.id === 'debts') {
+        catExpenses = analyticsExpenses.filter(e => e.categoryId === 'debts' || e.debtPaymentId || e.name.toLowerCase().startsWith('loan/debt pay:'));
+      } else if (cat.id === 'misc') {
+        catExpenses = analyticsExpenses.filter(e => {
+          if (e.categoryId === 'debts' || e.debtPaymentId || e.name.toLowerCase().startsWith('loan/debt pay:')) return false;
+          if (e.categoryId) return e.categoryId === 'misc';
+          const matchesOther = EXPENSE_CATEGORIES.slice(0, 6).some(c => e.name.toLowerCase().startsWith(c.prefix.toLowerCase()) || e.name.toLowerCase().includes(c.label.toLowerCase()));
+          return !matchesOther;
+        });
+      } else {
+        catExpenses = analyticsExpenses.filter(e => {
+          if (e.categoryId === 'debts' || e.debtPaymentId || e.name.toLowerCase().startsWith('loan/debt pay:')) return false;
+          if (e.categoryId) return e.categoryId === cat.id;
+          return e.name.toLowerCase().startsWith(cat.prefix.toLowerCase()) || e.name.toLowerCase().includes(cat.label.toLowerCase());
+        });
+      }
+      const catTotal = catExpenses.reduce((s, e) => s + e.amount, 0);
+      const catPct = totalAnalyticsExpense > 0 ? Math.round((catTotal / totalAnalyticsExpense) * 100) : 0;
+      return {
+        ...cat,
+        total: catTotal,
+        pct: catPct,
+        count: catExpenses.length
+      };
+    }).filter(c => c.total > 0).sort((a, b) => b.total - a.total);
+  }, [ALL_ANALYTICS_CATEGORIES, analyticsExpenses, totalAnalyticsExpense]);
 
   // Calendar Heatmap Generation
   const calendarMonthName = new Date(calendarYear, calendarMonth, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -1178,7 +1326,31 @@ export default function App() {
           </View>
 
           <View style={styles.topRightControls}>
-            <TouchableOpacity className="tap-scale" style={[styles.themePill, theme.card]} onPress={toggleTheme} activeOpacity={0.7}>
+            {/* Hidden File Input for JSON Backup Import */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              accept=".json"
+              style={{ display: 'none' }}
+              onChange={handleImportJSON}
+            />
+            <TouchableOpacity
+              style={[styles.themePill, theme.card]}
+              onPress={handleExportJSON}
+              activeOpacity={0.7}
+              title="Download JSON Backup"
+            >
+              <DownloadIcon size={15} color="#10b981" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.themePill, theme.card]}
+              onPress={() => fileInputRef.current?.click()}
+              activeOpacity={0.7}
+              title="Restore from JSON Backup"
+            >
+              <UploadIcon size={15} color="#3b82f6" />
+            </TouchableOpacity>
+            <TouchableOpacity className="tap-scale" style={[styles.themePill, theme.card]} onPress={toggleTheme} activeOpacity={0.7} title="Toggle Theme">
               {isDark ? <SunIcon size={16} color="#f59e0b" /> : <MoonIcon size={16} color="#10b981" />}
             </TouchableOpacity>
           </View>
@@ -1469,12 +1641,18 @@ export default function App() {
                     {EXPENSE_CATEGORIES.map(cat => (
                       <TouchableOpacity
                         key={cat.id}
-                        style={[styles.categoryChip, theme.inputBg]}
+                        style={[
+                          styles.categoryChip,
+                          selectedCategory === cat.id ? { backgroundColor: '#10b981', borderColor: '#10b981' } : theme.inputBg
+                        ]}
                         onPress={() => handleSelectCategory(cat)}
                         activeOpacity={0.7}
                       >
                         <Text style={{ fontSize: 13, marginRight: 4 }}>{cat.icon}</Text>
-                        <Text style={[styles.categoryChipText, theme.text]}>{cat.label}</Text>
+                        <Text style={[
+                          styles.categoryChipText,
+                          selectedCategory === cat.id ? { color: '#ffffff', fontWeight: '800' } : theme.text
+                        ]}>{cat.label}</Text>
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
@@ -1828,31 +2006,41 @@ export default function App() {
                     <Text style={[styles.emptySubtitle, theme.subtext]}>Tap the floating "+" button to quickly log expenses.</Text>
                   </View>
                 ) : (
-                  dateExpenses.map(item => (
-                    <View key={item.id} style={[styles.expenseItemRow, theme.inputBg]}>
-                      <View style={styles.expenseLeftCol}>
-                        <View style={styles.expenseTagIconBox}>
-                          <ReceiptIcon size={15} color="#f43f5e" />
+                  dateExpenses.map(item => {
+                    const itemCat = ALL_ANALYTICS_CATEGORIES.find(c => c.id === item.categoryId) || { icon: '💸', label: 'Expense' };
+                    return (
+                      <View key={item.id} style={[styles.expenseItemRow, theme.inputBg]}>
+                        <View style={styles.expenseLeftCol}>
+                          <View style={styles.expenseTagIconBox}>
+                            <Text style={{ fontSize: 13 }}>{itemCat.icon}</Text>
+                          </View>
+                          <View style={styles.expenseDetails}>
+                            <Text style={[styles.expName, theme.text]} numberOfLines={1}>{item.name}</Text>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                              <Text style={[styles.expDate, theme.subtext]}>{item.date}</Text>
+                              {item.categoryId && (
+                                <Text style={{ fontSize: 10, color: '#10b981', fontWeight: '700' }}>
+                                  • {itemCat.label}
+                                </Text>
+                              )}
+                            </View>
+                          </View>
                         </View>
-                        <View style={styles.expenseDetails}>
-                          <Text style={[styles.expName, theme.text]} numberOfLines={1}>{item.name}</Text>
-                          <Text style={[styles.expDate, theme.subtext]}>{item.date}</Text>
-                        </View>
-                      </View>
 
-                      <View style={styles.expenseRightCol}>
-                        <Text className="fintech-mono" style={styles.expAmount}>
-                          -{formatPeso(item.amount)}
-                        </Text>
-                        <TouchableOpacity onPress={() => openEdit(item)} style={[styles.iconBtnAction, theme.btnBg]} activeOpacity={0.6}>
-                          <EditIcon size={13} color={iconColor} />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => promptDeleteExpense(item)} style={[styles.iconBtnAction, theme.btnBg]} activeOpacity={0.6}>
-                          <TrashIcon size={13} color="#f43f5e" />
-                        </TouchableOpacity>
+                        <View style={styles.expenseRightCol}>
+                          <Text className="fintech-mono" style={styles.expAmount}>
+                            -{formatPeso(item.amount)}
+                          </Text>
+                          <TouchableOpacity onPress={() => openEdit(item)} style={[styles.iconBtnAction, theme.btnBg]} activeOpacity={0.6} accessibilityLabel="Edit Expense">
+                            <EditIcon size={13} color={iconColor} />
+                          </TouchableOpacity>
+                          <TouchableOpacity onPress={() => promptDeleteExpense(item)} style={[styles.iconBtnAction, theme.btnBg]} activeOpacity={0.6} accessibilityLabel="Delete Expense">
+                            <TrashIcon size={13} color="#f43f5e" />
+                          </TouchableOpacity>
+                        </View>
                       </View>
-                    </View>
-                  ))
+                    );
+                  })
                 )}
 
                 <View style={styles.cardActionsRow}>
@@ -1865,6 +2053,86 @@ export default function App() {
                     <Text style={styles.clearBtnText}>Clear Date</Text>
                   </TouchableOpacity>
                 </View>
+              </View>
+            )}
+
+            {/* EXPENSE CATEGORY ANALYTICS BREAKDOWN */}
+            {(activeTab === 'ALL' || activeTab === 'EXPENSES') && (
+              <View style={[styles.fintechCard, theme.card]}>
+                <View style={styles.cardHeaderFlex}>
+                  <View style={styles.headerIconGroup}>
+                    <PieChartIcon size={18} color="#10b981" />
+                    <View>
+                      <Text style={[styles.cardTitle, theme.text]}>Category Spending Breakdown</Text>
+                      <Text style={[styles.mainSubtitle, theme.subtext]}>
+                        Outflows for {analyticsRange === 'CUTOFF' ? 'Current Cut-off' : analyticsRange === 'MONTH' ? 'Selected Month' : 'All Recorded History'}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.presetPillsRow}>
+                    <TouchableOpacity
+                      style={[styles.presetPill, analyticsRange === 'CUTOFF' ? { backgroundColor: '#10b981' } : theme.btnBg]}
+                      onPress={() => setAnalyticsRange('CUTOFF')}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.presetPillText, analyticsRange === 'CUTOFF' ? { color: '#ffffff' } : theme.text]}>Cut-off</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.presetPill, analyticsRange === 'MONTH' ? { backgroundColor: '#10b981' } : theme.btnBg]}
+                      onPress={() => setAnalyticsRange('MONTH')}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.presetPillText, analyticsRange === 'MONTH' ? { color: '#ffffff' } : theme.text]}>Month</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.presetPill, analyticsRange === 'ALL' ? { backgroundColor: '#10b981' } : theme.btnBg]}
+                      onPress={() => setAnalyticsRange('ALL')}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.presetPillText, analyticsRange === 'ALL' ? { color: '#ffffff' } : theme.text]}>All</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {categoryBreakdown.length === 0 ? (
+                  <View style={styles.emptyStateBox}>
+                    <EmptyIcon size={28} color={mutedIconColor} style={{ marginBottom: 4 }} />
+                    <Text style={[styles.emptySubtitle, theme.subtext]}>No categorized spending recorded for this timeframe.</Text>
+                  </View>
+                ) : (
+                  <View style={{ gap: 10, marginTop: 4 }}>
+                    {categoryBreakdown.map(cat => (
+                      <View key={cat.id} style={{ gap: 4 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Text style={{ fontSize: 13 }}>{cat.icon}</Text>
+                            <Text style={[{ fontSize: 12, fontWeight: '700' }, theme.text]}>{cat.label}</Text>
+                            <Text style={[{ fontSize: 10 }, theme.subtext]}>({cat.count} tx)</Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                            <Text className="fintech-mono" style={[{ fontSize: 12, fontWeight: '800' }, theme.text]}>
+                              {formatPeso(cat.total)}
+                            </Text>
+                            <Text style={[{ fontSize: 11, fontWeight: '700', color: cat.color, minWidth: 32, textAlign: 'right' }]}>
+                              {cat.pct}%
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={styles.progressBarTrack}>
+                          <div
+                            style={{
+                              height: '100%',
+                              backgroundColor: cat.color,
+                              borderRadius: 99,
+                              width: `${Math.min(cat.pct, 100)}%`,
+                              transition: 'width 0.3s ease'
+                            }}
+                          />
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
               </View>
             )}
 
@@ -2517,12 +2785,18 @@ export default function App() {
                 {EXPENSE_CATEGORIES.map(cat => (
                   <TouchableOpacity
                     key={cat.id}
-                    style={[styles.categoryChip, theme.inputBg]}
+                    style={[
+                      styles.categoryChip,
+                      selectedCategory === cat.id ? { backgroundColor: '#10b981', borderColor: '#10b981' } : theme.inputBg
+                    ]}
                     onPress={() => handleSelectCategory(cat)}
                     activeOpacity={0.7}
                   >
                     <Text style={{ fontSize: 13, marginRight: 4 }}>{cat.icon}</Text>
-                    <Text style={[styles.categoryChipText, theme.text]}>{cat.label}</Text>
+                    <Text style={[
+                      styles.categoryChipText,
+                      selectedCategory === cat.id ? { color: '#ffffff', fontWeight: '800' } : theme.text
+                    ]}>{cat.label}</Text>
                   </TouchableOpacity>
                 ))}
               </ScrollView>
@@ -2811,8 +3085,31 @@ export default function App() {
             </div>
 
             <Dialog.Description style={{ fontSize: 12, color: isDark ? '#94a3b8' : '#64748b', margin: 0 }}>
-              Update description, amount, or date for this logged expense.
+              Update description, category, amount, or date for this logged expense.
             </Dialog.Description>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, theme.subtext]}>Category:</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryScroll}>
+                {EXPENSE_CATEGORIES.map(cat => (
+                  <TouchableOpacity
+                    key={cat.id}
+                    style={[
+                      styles.categoryChip,
+                      editCategory === cat.id ? { backgroundColor: '#10b981', borderColor: '#10b981' } : theme.inputBg
+                    ]}
+                    onPress={() => setEditCategory(cat.id)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ fontSize: 13, marginRight: 4 }}>{cat.icon}</Text>
+                    <Text style={[
+                      styles.categoryChipText,
+                      editCategory === cat.id ? { color: '#ffffff', fontWeight: '800' } : theme.text
+                    ]}>{cat.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
 
             <Text style={[styles.inputLabel, theme.subtext]}>Date</Text>
             <input
@@ -3438,6 +3735,74 @@ export default function App() {
         </Dialog.Portal>
       </Dialog.Root>
 
+      {/* MOBILE BOTTOM NAVIGATION BAR */}
+      <View style={[styles.bottomNavContainer, isDark ? styles.bottomNavDark : styles.bottomNavLight]}>
+        <TouchableOpacity
+          style={[styles.bottomNavItem, activeTab === 'ALL' && styles.bottomNavItemActive]}
+          onPress={() => setActiveTab('ALL')}
+          activeOpacity={0.7}
+          accessibilityLabel="Overview"
+          accessibilityRole="tab"
+        >
+          <WalletIcon size={18} color={activeTab === 'ALL' ? '#10b981' : mutedIconColor} />
+          <Text style={[styles.bottomNavText, { color: activeTab === 'ALL' ? '#10b981' : mutedIconColor }]}>
+            Overview
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.bottomNavItem, activeTab === 'DAILY' && styles.bottomNavItemActive]}
+          onPress={() => setActiveTab('DAILY')}
+          activeOpacity={0.7}
+          accessibilityLabel="Daily Budget"
+          accessibilityRole="tab"
+        >
+          <ChartIcon size={18} color={activeTab === 'DAILY' ? '#10b981' : mutedIconColor} />
+          <Text style={[styles.bottomNavText, { color: activeTab === 'DAILY' ? '#10b981' : mutedIconColor }]}>
+            Daily
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.bottomNavItem, activeTab === 'SALARY' && styles.bottomNavItemActive]}
+          onPress={() => setActiveTab('SALARY')}
+          activeOpacity={0.7}
+          accessibilityLabel="Cut-off Pay"
+          accessibilityRole="tab"
+        >
+          <BriefcaseIcon size={18} color={activeTab === 'SALARY' ? '#10b981' : mutedIconColor} />
+          <Text style={[styles.bottomNavText, { color: activeTab === 'SALARY' ? '#10b981' : mutedIconColor }]}>
+            Payroll
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.bottomNavItem, activeTab === 'EXPENSES' && styles.bottomNavItemActive]}
+          onPress={() => setActiveTab('EXPENSES')}
+          activeOpacity={0.7}
+          accessibilityLabel="Expenses"
+          accessibilityRole="tab"
+        >
+          <ReceiptIcon size={18} color={activeTab === 'EXPENSES' ? '#10b981' : mutedIconColor} />
+          <Text style={[styles.bottomNavText, { color: activeTab === 'EXPENSES' ? '#10b981' : mutedIconColor }]}>
+            Expenses
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.bottomNavItem, activeTab === 'DEBTS' && styles.bottomNavItemActive]}
+          onPress={() => setActiveTab('DEBTS')}
+          activeOpacity={0.7}
+          accessibilityLabel="Debts and Loans"
+          accessibilityRole="tab"
+        >
+          <CreditCardIcon size={18} color={activeTab === 'DEBTS' ? '#10b981' : mutedIconColor} />
+          <Text style={[styles.bottomNavText, { color: activeTab === 'DEBTS' ? '#10b981' : mutedIconColor }]}>
+            Debts{activeDebts.length > 0 ? ` (${activeDebts.length})` : ''}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
     </SafeAreaView>
   );
 }
@@ -3458,7 +3823,7 @@ const styles = StyleSheet.create({
   /* Floating Action Button (FAB) */
   floatingActionBtn: {
     position: 'absolute',
-    bottom: 24,
+    bottom: 84,
     right: 20,
     width: 54,
     height: 54,
@@ -3468,6 +3833,45 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 9980,
     boxShadow: '0 6px 16px rgba(16, 185, 129, 0.4)',
+  },
+
+  /* Mobile Bottom Navigation Bar */
+  bottomNavContainer: {
+    position: 'fixed',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+    paddingHorizontal: 8,
+    borderTopWidth: 1,
+    zIndex: 9970,
+  },
+  bottomNavDark: {
+    backgroundColor: '#090d16',
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
+    boxShadow: '0 -4px 20px rgba(0, 0, 0, 0.5)',
+  },
+  bottomNavLight: {
+    backgroundColor: '#ffffff',
+    borderTopColor: '#e2e8f0',
+    boxShadow: '0 -4px 20px rgba(0, 0, 0, 0.06)',
+  },
+  bottomNavItem: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 6,
+    gap: 3,
+  },
+  bottomNavItemActive: {
+    transform: [{ scale: 1.05 }],
+  },
+  bottomNavText: {
+    fontSize: 10,
+    fontWeight: '700',
   },
 
   /* Floating Toast Alert */
